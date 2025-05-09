@@ -26,10 +26,18 @@ class DrowsinessApp(QMainWindow):
         # 왼쪽: 영상 표시 영역 (QLabel 사용)
         self.video_label = QLabel()
         self.video_label.setAlignment(Qt.AlignCenter)
+        # 녹화 시간 표시용 라벨
+        self.time_label = QLabel("00:00.0")
+        self.time_label.setStyleSheet("font-size: 18pt; color: red; background-color: rgba(255,255,255,128);")
+        self.time_label.setAlignment(Qt.AlignRight | Qt.AlignBottom)
+        self.time_label.setFixedWidth(200)
 
         # 오른쪽: 정보 표시 영역
         self.face_label = QLabel("Face Detection: normal")
-        self.face_label.setStyleSheet("font-size: 14pt;")
+        self.face_label.setStyleSheet("font-size: 16pt; font-weight: bold; padding: 4px;")
+        self.record_time_label = QLabel("")
+        self.record_time_label.setStyleSheet("font-size: 18pt; color: #1976d2; background-color: #f0f0f0; border: 1px solid #b0b0b0; border-radius: 8px; padding: 6px 16px; margin-top: 8px; font-weight: bold;")
+        self.record_time_label.setVisible(False)
         self.wearable_label = QLabel("Wearable: 0")
         self.wearable_label.setStyleSheet("font-size: 14pt;")
 
@@ -45,14 +53,21 @@ class DrowsinessApp(QMainWindow):
         info_layout.addWidget(self.wearable_label)
         info_layout.addSpacing(20)
         info_layout.addWidget(self.record_button)
+        info_layout.addWidget(self.record_time_label)
         info_layout.addStretch(1)
 
         info_widget = QWidget()
         info_widget.setLayout(info_layout)
 
         # 메인 레이아웃: 왼쪽 영상, 오른쪽 정보 영역
+        # 영상 라벨만 배치 (녹화 시간은 오른쪽 정보 영역에 표시)
+        video_layout = QVBoxLayout()
+        video_layout.addWidget(self.video_label)
+        video_widget = QWidget()
+        video_widget.setLayout(video_layout)
+
         main_layout = QHBoxLayout()
-        main_layout.addWidget(self.video_label)
+        main_layout.addWidget(video_widget)
         main_layout.addWidget(info_widget)
 
         central_widget = QWidget()
@@ -186,6 +201,17 @@ class DrowsinessApp(QMainWindow):
         self.face_label.setText(f"Face Detection: {'detected' if flat_landmarks else 'no_face'}")
         self.wearable_label.setText(f"Wearable: {wearable_status}")
 
+        # 녹화 시간 표시 (face_label 아래)
+        if self.recording:
+            elapsed = (datetime.datetime.now() - self.start_time).total_seconds()
+            minutes = int(elapsed // 60)
+            seconds = elapsed % 60
+            self.record_time_label.setText(f"⏺ REC  {minutes:02d}:{seconds:04.1f}")
+            self.record_time_label.setVisible(True)
+        else:
+            self.record_time_label.setText("")
+            self.record_time_label.setVisible(False)
+
         # 프레임을 정상적으로 획득한 경우에만 영상 저장
         if self.recording and ret:
             # 영상 프레임은 모든 프레임마다 저장
@@ -203,8 +229,6 @@ class DrowsinessApp(QMainWindow):
                 if len(self.log_data) >= 500:
                     self.save_log_data_partial(write_header=(not self.partial_saved))
             self.frame_idx += 1
-
-
 
         # BGR 이미지를 RGB로 변환 후 QImage로 변환
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
