@@ -5,7 +5,7 @@ import csv
 import datetime
 import numpy as np
 import mediapipe as mp
-from PySide6.QtCore import QTimer, Qt
+from PySide6.QtCore import QTimer, Qt, QThread, Signal
 from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import QApplication, QMainWindow, QWidget, QLabel, QPushButton, QHBoxLayout, QVBoxLayout
 import zstandard as zstd
@@ -91,13 +91,19 @@ class DrowsinessApp(QMainWindow):
 
     def save_log_data_partial(self, write_header=False):
         """
-        log_data를 CSV에 append 저장. write_header=True면 헤더도 저장.
-        저장 후 self.log_data를 비움.
+        log_data를 청크 csv로 분할 저장 (labelN_chunks/chunk_XXXX.csv)
         """
-        mode = 'a' if os.path.exists(self.label_filename) else 'w'
-        with open(self.label_filename, mode, newline="") as csvfile:
+        import uuid
+        import glob
+        chunk_dir = self.label_filename.replace('.csv', '_chunks')
+        os.makedirs(chunk_dir, exist_ok=True)
+        # 청크 인덱스 결정
+        chunk_files = glob.glob(os.path.join(chunk_dir, 'chunk_*.csv'))
+        next_idx = len(chunk_files) + 1
+        chunk_path = os.path.join(chunk_dir, f'chunk_{next_idx:04d}.csv')
+        with open(chunk_path, 'w', newline="") as csvfile:
             writer = csv.writer(csvfile)
-            if write_header or (mode == 'w'):
+            if write_header or next_idx == 1:
                 header = ["Timestamp", "Wearable_Status"] + [f"landmark_{i}_{c}" for i in range(478) for c in ('x', 'y', 'z')]
                 writer.writerow(header)
             writer.writerows(self.log_data)
@@ -143,7 +149,6 @@ class DrowsinessApp(QMainWindow):
 
 
     def stop_recording(self):
-
         self.recording = False
         self.record_button.setText("▶ Start Recording")
         self.record_button.setStyleSheet("font-size: 20pt; background-color: green; color: white;")
@@ -153,23 +158,21 @@ class DrowsinessApp(QMainWindow):
         # 남은 로그 데이터 저장
         if self.log_data:
             self.save_log_data_partial(write_header=(not self.partial_saved))
-        # CSV 압축 및 삭제
-        csv_path = self.label_filename
-        if not csv_path.endswith('.csv'):
-            csv_path += '.csv'
-        zst_path = csv_path + '.zst'
-        try:
-            with open(csv_path, 'rb') as f_in, open(zst_path, 'wb') as f_out:
-                cctx = zstd.ZstdCompressor(level=10)
-                f_out.write(cctx.compress(f_in.read()))
-            shutil.move(zst_path, zst_path)  # 보장용
-            os.remove(csv_path)
-            print(f"CSV 압축 완료: {zst_path} (원본 삭제)")
-        except Exception as e:
-            print(f"CSV 압축/삭제 중 오류: {e}")
+        # 백그라운드에서 압축 시작
+        chunk_dir = self.label_filename.replace('.csv', '_chunks')
+        zst_path = self.label_filename + '.zst'
+        self.compress_thread = ChunkCompressorThread(chunk_dir, zst_path)
+        self.compress_thread.finished_signal.connect(self.on_compress_finished)
+        self.compress_thread.start()
         # 프레임 인덱스 초기화
         self.frame_idx = 0
-        print("녹화 종료 및 로그 저장 및 압축 완료")
+        print("녹화 종료 및 로그 저장 및 압축 시작")
+
+    def on_compress_finished(self, success, msg):
+        if success:
+            print(f"CSV 청크 압축 완료 및 정리: {msg}")
+        else:
+            print(f"CSV 청크 압축/정리 오류: {msg}")
 
 
     def update_frame(self):
@@ -241,6 +244,35 @@ class DrowsinessApp(QMainWindow):
         if self.video_writer:
             self.video_writer.release()
         event.accept()
+
+class ChunkCompressorThread(QThread):
+    finished_signal = Signal(bool, str)  # (성공여부, 메시지)
+    def __init__(self, chunk_dir, zst_path):
+        super().__init__()
+        self.chunk_dir = chunk_dir
+        self.zst_path = zst_path
+    def run(self):
+        import glob
+        import csv
+        import shutil
+        try:
+            chunk_files = sorted(glob.glob(os.path.join(self.chunk_dir, 'chunk_*.csv')))
+            if not chunk_files:
+                self.finished_signal.emit(False, 'No chunk files found')
+                return
+            cctx = zstd.ZstdCompressor(level=10)
+            with open(self.zst_path, 'wb') as f_out:
+                with cctx.stream_writer(f_out) as compressor:
+                    for i, chunk_file in enumerate(chunk_files):
+                        with open(chunk_file, 'rb') as f_in:
+                            shutil.copyfileobj(f_in, compressor)
+            # 모든 청크 삭제
+            for chunk_file in chunk_files:
+                os.remove(chunk_file)
+            os.rmdir(self.chunk_dir)
+            self.finished_signal.emit(True, self.zst_path)
+        except Exception as e:
+            self.finished_signal.emit(False, str(e))
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
