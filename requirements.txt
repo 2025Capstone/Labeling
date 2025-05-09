@@ -1,0 +1,6 @@
+mediapipe
+protobuf
+opencv-python
+PySide6
+numpy
+zstandard
