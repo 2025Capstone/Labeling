@@ -7,6 +7,7 @@ from PySide6.QtGui import QPixmap, QImage, QPainter, QColor
 import cv2
 import csv
 import sys
+import os
 
 class LabelBar(QWidget):
     def __init__(self, parent, label_data, total_frames, fps):
@@ -160,14 +161,15 @@ class VideoLabeler(QMainWindow):
         print(f"Labeled: {value} at {self.current_time:.2f} sec")
 
     def save_labels(self):
-        file_path, _ = QFileDialog.getSaveFileName(self, "Save CSV", "", "CSV files (*.csv)")
-        if file_path:
-            with open(file_path, 'w', newline='') as f:
-                writer = csv.writer(f)
-                writer.writerow(["start_time_sec", "end_time_sec", "label"])
-                for s, e, l in self.ranged_labels:
-                    writer.writerow([s, e, l])
-            print("Ranged labels saved.")
+        video_dir = os.path.dirname(self.video_path)
+        video_base = os.path.splitext(os.path.basename(self.video_path))[0]
+        csv_path = os.path.join(video_dir, f"{video_base}_drowsiness_label.csv")
+        with open(csv_path, 'w', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow(["start_time_sec", "end_time_sec", "label"])
+            for s, e, l in self.ranged_labels:
+                writer.writerow([s, e, l])
+        print(f"Ranged labels saved to: {csv_path}")
 
     def seek_video(self):
         frame_num = self.slider.value()
@@ -179,6 +181,11 @@ class VideoLabeler(QMainWindow):
             self.display_frame(frame)
 
     def set_start_time(self):
+        # Pause video playback
+        if self.timer.isActive():
+            self.timer.stop()
+            if hasattr(self, 'play_button'):
+                self.play_button.setText("▶")
         self.start_time = self.current_time
         self.label_bar.set_start_marker(self.start_time)
         print(f"Start time set at {self.start_time:.2f} sec")
