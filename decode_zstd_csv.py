@@ -10,9 +10,15 @@ def decompress_zstd_csv(zstd_path, out_csv_path=None):
         raise ValueError('입력 파일은 .zst 확장자를 가져야 합니다.')
     if out_csv_path is None:
         out_csv_path = zstd_path[:-4]  # .zst 제거
-    with open(zstd_path, 'rb') as f_in, open(out_csv_path, 'wb') as f_out:
-        dctx = zstd.ZstdDecompressor()
-        f_out.write(dctx.decompress(f_in.read()))
+    dctx = zstd.ZstdDecompressor()
+    with open(zstd_path, 'rb') as f_in, open(out_csv_path, 'w', encoding='utf-8', newline='') as f_out:
+        with dctx.stream_reader(f_in) as reader:
+            # Read and write in chunks for memory efficiency
+            while True:
+                chunk = reader.read(16384)  # 16KB
+                if not chunk:
+                    break
+                f_out.write(chunk.decode('utf-8'))
     print(f"복호화 완료: {out_csv_path}")
 
 if __name__ == "__main__":
