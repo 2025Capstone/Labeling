@@ -10,6 +10,9 @@ from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import QApplication, QMainWindow, QWidget, QLabel, QPushButton, QHBoxLayout, QVBoxLayout
 import zstandard as zstd
 import shutil
+import firebase_admin
+from firebase_admin import credentials, db
+
 
 class DrowsinessApp(QMainWindow):
     def __init__(self):
@@ -19,7 +22,7 @@ class DrowsinessApp(QMainWindow):
         self.last_logged_second = -0.5
 
         # 웹캠 연결 (카메라 인덱스 1)
-        self.cap = cv2.VideoCapture(1)
+        self.cap = cv2.VideoCapture(0)
         self.mp_face_mesh = mp.solutions.face_mesh
         self.face_mesh = self.mp_face_mesh.FaceMesh(static_image_mode=False, max_num_faces=1, refine_landmarks=True, min_detection_confidence=0.5, min_tracking_confidence=0.5)
 
@@ -275,6 +278,11 @@ class ChunkCompressorThread(QThread):
             self.finished_signal.emit(False, str(e))
 
 if __name__ == "__main__":
+    cred = credentials.Certificate("hrvdataset-firebase-adminsdk-oof96-2a96d6ac7f.json")
+    firebase_admin.initialize_app(cred, {
+        'databaseURL': 'https://hrvdataset-default-rtdb.firebaseio.com/'
+    })
+    
     app = QApplication(sys.argv)
     window = DrowsinessApp()
     window.show()
