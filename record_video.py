@@ -10,6 +10,10 @@ from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import QApplication, QMainWindow, QWidget, QLabel, QPushButton, QHBoxLayout, QVBoxLayout
 import zstandard as zstd
 import shutil
+import firebase_admin
+from firebase_admin import credentials, db
+import string, random
+
 
 class DrowsinessApp(QMainWindow):
     def __init__(self):
@@ -17,15 +21,25 @@ class DrowsinessApp(QMainWindow):
         self.setWindowTitle("Webcam & Drowsiness Recorder")
         self.start_time = None
         self.last_logged_second = -0.5
+        
+        
+        # … 기존 UI/타이머 세팅 …
+        self.user_id = "123456"
+        self.root_ref = db.reference(self.user_id)
+        self.pair_code = None
+        self.pair_timer = None
+        self.recording = False
+        self.is_pairing = False     # ← 페어링 중인지를 나타내는 플래그
 
         # 웹캠 연결 (카메라 인덱스 1)
-        self.cap = cv2.VideoCapture(1)
+        self.cap = cv2.VideoCapture(0)
         self.mp_face_mesh = mp.solutions.face_mesh
         self.face_mesh = self.mp_face_mesh.FaceMesh(static_image_mode=False, max_num_faces=1, refine_landmarks=True, min_detection_confidence=0.5, min_tracking_confidence=0.5)
 
         # 왼쪽: 영상 표시 영역 (QLabel 사용)
         self.video_label = QLabel()
         self.video_label.setAlignment(Qt.AlignCenter)
+        
         # 녹화 시간 표시용 라벨
         self.time_label = QLabel("00:00.0")
         self.time_label.setStyleSheet("font-size: 18pt; color: red; background-color: rgba(255,255,255,128);")
@@ -40,6 +54,11 @@ class DrowsinessApp(QMainWindow):
         self.record_time_label.setVisible(False)
         self.wearable_label = QLabel("Wearable: 0")
         self.wearable_label.setStyleSheet("font-size: 14pt;")
+        
+        # 페어링 상태 표시
+        self.pairing_status_label = QLabel("")
+        self.pairing_status_label.setStyleSheet("font-size: 14pt; font-style: italic; color: gray;")
+
 
         # 녹화 시작/종료 버튼 (토글)
         self.record_button = QPushButton("▶ Start Recording")
@@ -51,6 +70,7 @@ class DrowsinessApp(QMainWindow):
         info_layout = QVBoxLayout()
         info_layout.addWidget(self.face_label)
         info_layout.addWidget(self.wearable_label)
+        info_layout.addWidget(self.pairing_status_label)
         info_layout.addSpacing(20)
         info_layout.addWidget(self.record_button)
         info_layout.addWidget(self.record_time_label)
@@ -88,6 +108,53 @@ class DrowsinessApp(QMainWindow):
         self.timer = QTimer()
         self.timer.timeout.connect(self.update_frame)
         self.timer.start(15)
+    
+    def init_pairing(self):
+        self.is_pairing = True      # ← 페어링 시작
+        # 2) 매번 새로운 6자리 코드 생성
+        self.pair_code = ''.join(random.choices(string.ascii_uppercase + string.digits, k=6))
+        # 3) /<UID>/pairing/pair_code 에 쓰기 (덮어쓰기)
+        self.root_ref.child("pairing").set({
+            "pair_code": self.pair_code,
+            "stop": False,
+            "paired": False
+        })   
+        # 4) 대기 메시지 표시
+        self.record_button.setText("■ Cancle Pairing")
+        self.record_button.setStyleSheet("font-size: 20pt; background-color: red; color: white;")
+        
+        self.pairing_status_label.setText(f"Waiting Pairing...  (Code: {self.pair_code})")
+        # 5) PPG_Data 생길 때까지 1초마다 체크
+        self.pair_timer = QTimer(self)
+        self.pair_timer.timeout.connect(self.check_paired)
+        self.pair_timer.start(1000)
+        
+    def cancel_pairing(self):
+        self.is_pairing = False     # ← 페어링 플래그 리셋
+        # 페어링 취소: Firebase 노드 삭제
+        self.root_ref.child("pairing").child("pair_code").delete()
+        self.root_ref.child("pairing").update({
+            "stop": True,
+            "paired": False
+        })
+        # 타이머 중지, 메시지 초기화
+        if self.pair_timer:
+            self.pair_timer.stop()
+        self.pairing_status_label.setText("")
+        # 버튼 원래 상태로 복원
+        self.record_button.setText("▶ Start Recording")
+        self.record_button.setStyleSheet("font-size: 20pt; background-color: green; color: white;")
+        
+    def check_paired(self):
+        data = self.root_ref.child("pairing").get()
+        print("Pairing: ", data)
+        if data:
+            paired = data.get("paired", False)
+            stop   = data.get("stop",   True)
+            if paired and not stop:
+                self.pair_timer.stop()
+                self.start_recording()     # 녹화 시작
+                self.pairing_status_label.setText("")
 
     def save_log_data_partial(self, write_header=False):
         """
@@ -113,7 +180,12 @@ class DrowsinessApp(QMainWindow):
 
     def toggle_record(self):
         if not self.recording:
-            self.start_recording()
+            if self.is_pairing:
+                # 페어링 중이면 즉시 취소
+                self.cancel_pairing()
+            else:
+                # 아니면 페어링 시작
+                self.init_pairing()
         else:
             self.stop_recording()
 
@@ -158,6 +230,14 @@ class DrowsinessApp(QMainWindow):
         # 남은 로그 데이터 저장
         if self.log_data:
             self.save_log_data_partial(write_header=(not self.partial_saved))
+            
+        # ① 웨어러블 측정 중지 신호 보내기
+        self.root_ref.child("pairing").update({
+            "stop": True,
+            "paired": False
+        })
+        self.root_ref.child("pairing").child("pair_code").delete()
+        
         # 백그라운드에서 압축 시작
         chunk_dir = self.label_filename.replace('.csv', '_chunks')
         zst_path = self.label_filename + '.zst'
@@ -275,6 +355,11 @@ class ChunkCompressorThread(QThread):
             self.finished_signal.emit(False, str(e))
 
 if __name__ == "__main__":
+    cred = credentials.Certificate("hrvdataset-firebase-adminsdk-oof96-2a96d6ac7f.json")
+    firebase_admin.initialize_app(cred, {
+        'databaseURL': 'https://hrvdataset-default-rtdb.firebaseio.com/'
+    })
+    
     app = QApplication(sys.argv)
     window = DrowsinessApp()
     window.show()
