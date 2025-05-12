@@ -5,3 +5,5 @@ PySide6
 numpy
 zstandard
 firebase-admin
+neurokit2
+pandas

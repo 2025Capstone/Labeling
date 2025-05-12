@@ -14,6 +14,12 @@ import firebase_admin
 from firebase_admin import credentials, db
 import string, random
 
+import pandas as pd
+import neurokit2 as nk
+import numpy as np
+from scipy.stats import chi2, f
+from sklearn.decomposition import PCA
+from sklearn.preprocessing import StandardScaler
 
 class DrowsinessApp(QMainWindow):
     def __init__(self):
@@ -54,6 +60,14 @@ class DrowsinessApp(QMainWindow):
         self.record_time_label.setVisible(False)
         self.wearable_label = QLabel("Wearable: 0")
         self.wearable_label.setStyleSheet("font-size: 14pt;")
+        self.start_time_label = QLabel("start")
+        self.start_time_label.setStyleSheet("font-size: 12pt; color: #71C700")
+        # self.start_time_label.setVisible(False)
+        
+        self.end_time_label = QLabel("end")
+        self.end_time_label.setStyleSheet("font-size: 12pt; color: #71C700")
+        # self.end_time_label.setVisible(False)
+        
         
         # 페어링 상태 표시
         self.pairing_status_label = QLabel("")
@@ -75,6 +89,9 @@ class DrowsinessApp(QMainWindow):
         info_layout.addWidget(self.record_button)
         info_layout.addWidget(self.record_time_label)
         info_layout.addStretch(1)
+        info_layout.addWidget(self.start_time_label)    
+        info_layout.addSpacing(20)
+        info_layout.addWidget(self.end_time_label)
 
         info_widget = QWidget()
         info_widget.setLayout(info_layout)
@@ -119,6 +136,7 @@ class DrowsinessApp(QMainWindow):
             "stop": False,
             "paired": False
         })   
+        self.root_ref.child("PPG_Data").delete()
         # 4) 대기 메시지 표시
         self.record_button.setText("■ Cancle Pairing")
         self.record_button.setStyleSheet("font-size: 20pt; background-color: red; color: white;")
@@ -171,7 +189,7 @@ class DrowsinessApp(QMainWindow):
         with open(chunk_path, 'w', newline="") as csvfile:
             writer = csv.writer(csvfile)
             if write_header or next_idx == 1:
-                header = ["Timestamp", "Wearable_Status"] + [f"landmark_{i}_{c}" for i in range(478) for c in ('x', 'y', 'z')]
+                header = ["Timestamp"] + [f"landmark_{i}_{c}" for i in range(478) for c in ('x', 'y', 'z')]
                 writer.writerow(header)
             writer.writerows(self.log_data)
         self.log_data = []
@@ -208,6 +226,10 @@ class DrowsinessApp(QMainWindow):
         self.partial_saved = False
         self.start_time = datetime.datetime.now()
         self.last_logged_second = -0.5
+
+        self.start_time_label.setVisible(True)
+        self.start_time_label.setText(f"{self.start_time}")
+        
         # 프레임 인덱스 초기화
         self.frame_idx = 0
         # 랜드마크 프레임 샘플링 주기 변수 초기화 (프레임 카운터 기반)
@@ -224,6 +246,11 @@ class DrowsinessApp(QMainWindow):
         self.recording = False
         self.record_button.setText("▶ Start Recording")
         self.record_button.setStyleSheet("font-size: 20pt; background-color: green; color: white;")
+        # self.start_time_label.setVisible(False)
+        # self.start_time_label.setText("")
+        self.end_time = datetime.datetime.now()
+        self.end_time_label.setText(f"{self.end_time}")
+        
         if self.video_writer:
             self.video_writer.release()
             self.video_writer = None
@@ -231,12 +258,27 @@ class DrowsinessApp(QMainWindow):
         if self.log_data:
             self.save_log_data_partial(write_header=(not self.partial_saved))
             
-        # ① 웨어러블 측정 중지 신호 보내기
+        # 웨어러블 측정 중지 신호 보내기
         self.root_ref.child("pairing").update({
             "stop": True,
             "paired": False
         })
         self.root_ref.child("pairing").child("pair_code").delete()
+        
+        # PPG 수집 완전 종료 후 HRV 계산
+        try:
+            df_wearable_feature = self.compute_hrv_from_firebase()
+            
+            n_cols = df_wearable_feature.shape[1]
+            # 컬럼명을 wearable_0, wearable_1, … 로 변경
+            new_columns = ["Timestamp", "Segment End"] + [f"wearable_{i}" for i in range(n_cols - 2)]
+            df_wearable_feature.columns = new_columns
+            # label 파일 이름 기준으로 HRV 요약 파일 경로 생성
+            wearable_csv = self.label_filename.replace(".csv", "_wearable.csv")
+            df_wearable_feature.to_csv(wearable_csv, index=False)
+            print(f"✅ Wearable features 저장: {wearable_csv}")
+        except Exception as e:
+            print("❌ Wearable features 계산 오류:", e)
         
         # 백그라운드에서 압축 시작
         chunk_dir = self.label_filename.replace('.csv', '_chunks')
@@ -304,9 +346,9 @@ class DrowsinessApp(QMainWindow):
             if self.frame_idx % self.save_interval == 0:
                 timestamp = self.frame_idx / self.actual_fps
                 if flat_landmarks is not None:
-                    row = [round(timestamp, 4), wearable_status] + flat_landmarks
+                    row = [round(timestamp, 4)] + flat_landmarks
                 else:
-                    row = [round(timestamp, 4), wearable_status] + [None]*1434
+                    row = [round(timestamp, 4)] + [None]*1434
                 self.log_data.append(row)
                 # 500개마다 partial 저장
                 if len(self.log_data) >= 500:
@@ -324,6 +366,185 @@ class DrowsinessApp(QMainWindow):
         if self.video_writer:
             self.video_writer.release()
         event.accept()
+        
+    def compute_hrv_from_firebase(self, alpha=0.05, fs=25):
+        # 1) Firebase 에서 PPG 데이터 불러오기
+        ppg_node = self.root_ref.child("PPG_Data").get() or {}
+        timestamps, ppg = [], []
+        for k, v in ppg_node.items():
+            if not v.get("isError", False):
+                timestamps.append(pd.to_datetime(v["timestamp"]))
+                ppg.append(v["ppgGreen"])
+        if len(ppg) < fs*2:
+            raise RuntimeError("PPG 데이터가 충분치 않습니다.")
+        
+        # 2) DataFrame 생성 및 정렬
+        df = pd.DataFrame({"Timestamp": timestamps, "PPG": ppg})
+        df = df.sort_values("Timestamp")
+        
+        # 초반 2초 데이터 삭제 (시작 안정화)
+        # start = df["Timestamp"].iloc[0] + pd.Timedelta(seconds=2)
+        # df = df[df["Timestamp"] > start]
+        
+        # 3) 신호 정제 & 피크 검출
+        clean = nk.ppg_clean(df["PPG"], sampling_rate=fs)
+        def find_prominent_peaks(sig, threshold=0.1, min_y=0):
+            peaks = []
+            for i in range(1, len(sig)-1):
+                if sig[i]>sig[i-1] and sig[i]>sig[i+1] and sig[i]>min_y:
+                    L = min(sig[max(0,i-5):i])
+                    R = min(sig[i+1:i+6])
+                    if sig[i]-max(L,R) > threshold:
+                        peaks.append(i)
+            return peaks
+        
+        idx = find_prominent_peaks(clean)
+        ts_peaks = df["Timestamp"].iloc[idx].values
+        
+        # 4) 2분 세그먼트마다 HRV 지표 계산
+        hrv_segments = []
+        i = 0   
+        while i < len(ts_peaks):
+            seg_start = ts_peaks[i]
+            seg_end = seg_start + pd.Timedelta(minutes=2)
+            inds = []
+            while i<len(ts_peaks) and ts_peaks[i]<seg_end:
+                inds.append(idx[i])
+                i+=1
+            if len(inds)<2:
+                print(f"구간 {seg_start} ~ {seg_end} 에는 피크가 부족하여 HRV 계산을 건너뜁니다.")
+                continue
+            
+            # time-domain
+            rri = np.diff(ts_peaks[i-len(inds):i]).astype('timedelta64[ms]').astype(int)
+            hr = 60000/rri
+            
+            hrv_time = nk.hrv_time(inds, sampling_rate=fs)
+            time_metrics = {
+                "mean_nni": hrv_time["HRV_MeanNN"].iloc[0],
+                "median_nni": hrv_time["HRV_MedianNN"].iloc[0],
+                "range_nni": hrv_time["HRV_MaxNN"].iloc[0] - hrv_time["HRV_MinNN"].iloc[0],
+                "sdnn": hrv_time["HRV_SDNN"].iloc[0],
+                "sdsd": hrv_time["HRV_SDSD"].iloc[0],
+                "rmssd": hrv_time["HRV_RMSSD"].iloc[0],
+                "nni_50": int(np.sum(np.abs(np.diff(rri)) > 50)),
+                "pnni_50": hrv_time["HRV_pNN50"].iloc[0],
+                "nni_20": int(np.sum(np.abs(np.diff(rri)) > 20)),
+                "pnni_20": hrv_time["HRV_pNN20"].iloc[0],
+                "cvsd": hrv_time["HRV_CVSD"].iloc[0],
+                "cvnni": hrv_time["HRV_CVNN"].iloc[0],
+                "mean_hr": np.nanmean(hr),
+                "min_hr": np.nanmin(hr),
+                "max_hr": np.nanmax(hr),
+                "std_hr": np.nanstd(hr, ddof=1),
+            }
+            
+            # freq-domain
+            hrv_freq = nk.hrv_frequency(inds, sampling_rate=fs, normalize=False)
+            if not hrv_freq.empty:
+                freq_metrics = {
+                    "power_vlf": hrv_freq["HRV_VLF"].iloc[0],
+                    "power_lf":  hrv_freq["HRV_LF"].iloc[0],
+                    "power_hf":  hrv_freq["HRV_HF"].iloc[0],
+                    "total_power": hrv_freq["HRV_TP"].iloc[0],
+                    "lf_hf_ratio": hrv_freq["HRV_LFHF"].iloc[0]
+                }
+            else:
+                freq_metrics = {k: np.nan for k in ["power_vlf","power_lf","power_hf","total_power","lf_hf_ratio"]}
+            
+            # nonlinear
+            hrv_nl = nk.hrv_nonlinear(inds, sampling_rate=fs)
+            if not hrv_nl.empty:
+                nonlinear_metrics = {
+                    "csi":           float(hrv_nl["HRV_CSI"].iloc[0]),
+                    "cvi":           float(hrv_nl["HRV_CVI"].iloc[0]),
+                    "modified_csi":  float(hrv_nl["HRV_CSI_Modified"].iloc[0]),
+                    "sampen":        float(hrv_nl["HRV_SampEn"].iloc[0])
+                }
+            else:
+                nonlinear_metrics = {k: np.nan for k in ["csi","cvi","modified_csi","sampen"]}
+                
+            hrv_segments.append({
+                "Segment Start": seg_start,
+                "Segment End": seg_end,
+                "time": time_metrics,
+                "freq": freq_metrics,
+                "nonlinear": nonlinear_metrics
+            })
+            
+        results_list = []
+        t0 = hrv_segments[0]["Segment Start"]
+        for res in hrv_segments:
+            start = res["Segment Start"]
+            end   = res["Segment End"]
+            row = {
+                "Timestamp":   (start - t0) / np.timedelta64(1, 's'),
+                "Segment End": (end   - t0) / np.timedelta64(1, 's'),
+            }
+            # Time-domain dict → Time_ 접두어
+            for key, val in res["time"].items():
+                row[f"Time_{key}"] = val
+
+            # Frequency-domain dict → Freq_ 접두어
+            for key, val in res["freq"].items():
+                row[f"Freq_{key}"] = val
+
+            # Nonlinear-domain dict → Nonlinear_ 접두어
+            for key, val in res["nonlinear"].items():
+                row[f"Nonlinear_{key}"] = val
+
+            results_list.append(row)
+            
+        df_wearable_features = pd.DataFrame(results_list)
+        # --- 딕셔너리 → DataFrame 생성 ---
+        df_segment = pd.DataFrame({
+            "Time": pd.Series(res["time"]),
+            "Frequency": pd.Series(res["freq"]),
+            "Nonlinear": pd.Series(res["nonlinear"])
+        })
+        
+        start_str = pd.to_datetime(seg_start).strftime("%H:%M:%S")
+        end_str   = pd.to_datetime(seg_end).strftime("%H:%M:%S")
+        
+        # 5) MSPC-PCA 이상탐지: 각 도메인별로 n=1 PCA, T2/SPE 계산 및 ULC
+        N = len(df_wearable_features)
+        # 도메인별 컬럼 매핑
+        domains = {
+            "Time": df_wearable_features.filter(regex="^Time_").columns,
+            "Freq": df_wearable_features.filter(regex="^Freq_").columns,
+            "Nonlinear": df_wearable_features.filter(regex="^Nonlinear_").columns
+        }
+        
+        for domain, cols in domains.items():
+            # 1) 데이터 준비 및 표준화
+            X = df_wearable_features[cols].fillna(0).values.astype(float)
+            X_scaled = StandardScaler().fit_transform(X)
+            
+            # 2) PCA (단일 주성분)
+            pca = PCA(n_components=1).fit(X_scaled)
+            scores = pca.transform(X_scaled).flatten()
+            var1 = pca.explained_variance_[0]
+        
+            # 3) Hotelling’s T² 계산
+            T2 = (scores ** 2) / var1
+            ulc_t2 = ((N + 1) * (N - 1)/(N * (N - 1))) * f.ppf(1 - alpha, 1, N - 1)
+            
+            # 4) SPE 계산
+            X_hat = pca.inverse_transform(scores.reshape(-1,1))
+            SPE = ((X_scaled - X_hat)**2).sum(axis=1)
+            b, v = SPE.mean(), SPE.var()
+            df_chi = (2 * b * b) / v
+            ulc_spe = (v / (2 * b)) * chi2.ppf(1 - alpha, df_chi)
+            
+            # 5) DataFrame에 컬럼 추가
+            df_wearable_features[f"{domain}_T2"]      = T2
+            df_wearable_features[f"{domain}_SPE"]     = SPE
+            df_wearable_features[f"{domain}_ULC_T2"]  = ulc_t2
+            df_wearable_features[f"{domain}_ULC_SPE"] = ulc_spe
+            
+        # 6) 결과 반환
+        return df_wearable_features
+        
 
 class ChunkCompressorThread(QThread):
     finished_signal = Signal(bool, str)  # (성공여부, 메시지)
