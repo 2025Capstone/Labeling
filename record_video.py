@@ -60,6 +60,14 @@ class DrowsinessApp(QMainWindow):
         self.record_time_label.setVisible(False)
         self.wearable_label = QLabel("Wearable: 0")
         self.wearable_label.setStyleSheet("font-size: 14pt;")
+        self.start_time_label = QLabel("start")
+        self.start_time_label.setStyleSheet("font-size: 12pt; color: #71C700")
+        # self.start_time_label.setVisible(False)
+        
+        self.end_time_label = QLabel("end")
+        self.end_time_label.setStyleSheet("font-size: 12pt; color: #71C700")
+        # self.end_time_label.setVisible(False)
+        
         
         # 페어링 상태 표시
         self.pairing_status_label = QLabel("")
@@ -81,6 +89,9 @@ class DrowsinessApp(QMainWindow):
         info_layout.addWidget(self.record_button)
         info_layout.addWidget(self.record_time_label)
         info_layout.addStretch(1)
+        info_layout.addWidget(self.start_time_label)    
+        info_layout.addSpacing(20)
+        info_layout.addWidget(self.end_time_label)
 
         info_widget = QWidget()
         info_widget.setLayout(info_layout)
@@ -178,7 +189,7 @@ class DrowsinessApp(QMainWindow):
         with open(chunk_path, 'w', newline="") as csvfile:
             writer = csv.writer(csvfile)
             if write_header or next_idx == 1:
-                header = ["Timestamp", "Wearable_Status"] + [f"landmark_{i}_{c}" for i in range(478) for c in ('x', 'y', 'z')]
+                header = ["Timestamp"] + [f"landmark_{i}_{c}" for i in range(478) for c in ('x', 'y', 'z')]
                 writer.writerow(header)
             writer.writerows(self.log_data)
         self.log_data = []
@@ -215,6 +226,10 @@ class DrowsinessApp(QMainWindow):
         self.partial_saved = False
         self.start_time = datetime.datetime.now()
         self.last_logged_second = -0.5
+
+        self.start_time_label.setVisible(True)
+        self.start_time_label.setText(f"{self.start_time}")
+        
         # 프레임 인덱스 초기화
         self.frame_idx = 0
         # 랜드마크 프레임 샘플링 주기 변수 초기화 (프레임 카운터 기반)
@@ -231,6 +246,11 @@ class DrowsinessApp(QMainWindow):
         self.recording = False
         self.record_button.setText("▶ Start Recording")
         self.record_button.setStyleSheet("font-size: 20pt; background-color: green; color: white;")
+        # self.start_time_label.setVisible(False)
+        # self.start_time_label.setText("")
+        self.end_time = datetime.datetime.now()
+        self.end_time_label.setText(f"{self.end_time}")
+        
         if self.video_writer:
             self.video_writer.release()
             self.video_writer = None
@@ -248,8 +268,11 @@ class DrowsinessApp(QMainWindow):
         # PPG 수집 완전 종료 후 HRV 계산
         try:
             df_wearable_feature = self.compute_hrv_from_firebase()
+            
+            n_cols = df_wearable_feature.shape[1]
             # 컬럼명을 wearable_0, wearable_1, … 로 변경
-            df_wearable_feature.columns = ["wearable_{}".format(i) for i in range(len(df_wearable_feature.columns))]
+            new_columns = ["Timestamp", "Segment End"] + [f"wearable_{i}" for i in range(n_cols - 2)]
+            df_wearable_feature.columns = new_columns
             # label 파일 이름 기준으로 HRV 요약 파일 경로 생성
             wearable_csv = self.label_filename.replace(".csv", "_wearable.csv")
             df_wearable_feature.to_csv(wearable_csv, index=False)
@@ -323,9 +346,9 @@ class DrowsinessApp(QMainWindow):
             if self.frame_idx % self.save_interval == 0:
                 timestamp = self.frame_idx / self.actual_fps
                 if flat_landmarks is not None:
-                    row = [round(timestamp, 4), wearable_status] + flat_landmarks
+                    row = [round(timestamp, 4)] + flat_landmarks
                 else:
-                    row = [round(timestamp, 4), wearable_status] + [None]*1434
+                    row = [round(timestamp, 4)] + [None]*1434
                 self.log_data.append(row)
                 # 500개마다 partial 저장
                 if len(self.log_data) >= 500:
