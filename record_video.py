@@ -125,6 +125,7 @@ class DrowsinessApp(QMainWindow):
             "stop": False,
             "paired": False
         })   
+        self.root_ref.child("PPG_Data").delete()
         # 4) 대기 메시지 표시
         self.record_button.setText("■ Cancle Pairing")
         self.record_button.setStyleSheet("font-size: 20pt; background-color: red; color: white;")
@@ -237,12 +238,24 @@ class DrowsinessApp(QMainWindow):
         if self.log_data:
             self.save_log_data_partial(write_header=(not self.partial_saved))
             
-        # ① 웨어러블 측정 중지 신호 보내기
+        # 웨어러블 측정 중지 신호 보내기
         self.root_ref.child("pairing").update({
             "stop": True,
             "paired": False
         })
         self.root_ref.child("pairing").child("pair_code").delete()
+        
+        # PPG 수집 완전 종료 후 HRV 계산
+        try:
+            df_wearable_feature = self.compute_hrv_from_firebase()
+            # 컬럼명을 wearable_0, wearable_1, … 로 변경
+            df_wearable_feature.columns = ["wearable_{}".format(i) for i in range(len(df_wearable_feature.columns))]
+            # label 파일 이름 기준으로 HRV 요약 파일 경로 생성
+            wearable_csv = self.label_filename.replace(".csv", "_wearable.csv")
+            df_wearable_feature.to_csv(wearable_csv, index=False)
+            print(f"✅ Wearable features 저장: {wearable_csv}")
+        except Exception as e:
+            print("❌ Wearable features 계산 오류:", e)
         
         # 백그라운드에서 압축 시작
         chunk_dir = self.label_filename.replace('.csv', '_chunks')
@@ -420,10 +433,10 @@ class DrowsinessApp(QMainWindow):
             hrv_nl = nk.hrv_nonlinear(inds, sampling_rate=fs)
             if not hrv_nl.empty:
                 nonlinear_metrics = {
-                    "csi":           float(hrv_nl["HRV_CSI"]).iloc[0],
-                    "cvi":           float(hrv_nl["HRV_CVI"]).iloc[0],
-                    "modified_csi":  float(hrv_nl["HRV_CSI_Modified"]).iloc[0],
-                    "sampen":        float(hrv_nl["HRV_SampEn"]).iloc[0]
+                    "csi":           float(hrv_nl["HRV_CSI"].iloc[0]),
+                    "cvi":           float(hrv_nl["HRV_CVI"].iloc[0]),
+                    "modified_csi":  float(hrv_nl["HRV_CSI_Modified"].iloc[0]),
+                    "sampen":        float(hrv_nl["HRV_SampEn"].iloc[0])
                 }
             else:
                 nonlinear_metrics = {k: np.nan for k in ["csi","cvi","modified_csi","sampen"]}
@@ -437,10 +450,13 @@ class DrowsinessApp(QMainWindow):
             })
             
         results_list = []
+        t0 = hrv_segments[0]["Segment Start"]
         for res in hrv_segments:
+            start = res["Segment Start"]
+            end   = res["Segment End"]
             row = {
-                "Segment Start": res["Segment Start"],
-                "Segment End":   res["Segment End"]
+                "Timestamp":   (start - t0) / np.timedelta64(1, 's'),
+                "Segment End": (end   - t0) / np.timedelta64(1, 's'),
             }
             # Time-domain dict → Time_ 접두어
             for key, val in res["time"].items():
