@@ -62,6 +62,11 @@ class DrowsinessApp(QMainWindow):
         self.wearable_label.setStyleSheet("font-size: 14pt;")
         self.start_time_label = QLabel("start")
         self.start_time_label.setStyleSheet("font-size: 12pt; color: #71C700")
+        
+        self.waiting_save_label = QLabel("")
+        self.waiting_save_label.setStyleSheet("font-size: 12pt; color: #71C700")
+        self.waiting_save_label.setVisible(False)
+        
         # self.start_time_label.setVisible(False)
         
         self.end_time_label = QLabel("end")
@@ -92,6 +97,8 @@ class DrowsinessApp(QMainWindow):
         info_layout.addWidget(self.start_time_label)    
         info_layout.addSpacing(20)
         info_layout.addWidget(self.end_time_label)
+        info_layout.addSpacing(20)
+        info_layout.addWidget(self.waiting_save_label)
 
         info_widget = QWidget()
         info_widget.setLayout(info_layout)
@@ -265,6 +272,19 @@ class DrowsinessApp(QMainWindow):
         })
         self.root_ref.child("pairing").child("pair_code").delete()
         
+        from PySide6.QtCore import QTimer
+        
+        self.waiting_save_label.setVisible(True)
+        self.waiting_save_label.setText("PPG 데이터 업로드 기다리는 중...(3분)")
+        
+        self.record_button.setText("■ Waiting Saving")
+        self.record_button.setStyleSheet("font-size: 20pt; background-color: grey; color: white;")
+        self.record_button.setEnabled(False)
+        # 3분(180000ms) 뒤에 finish_wearable 를 호출
+        QTimer.singleShot(180000, self.finish_wearable)
+        
+
+    def finish_wearable(self):
         # PPG 수집 완전 종료 후 HRV 계산
         try:
             df_wearable_feature = self.compute_hrv_from_firebase()
@@ -289,6 +309,11 @@ class DrowsinessApp(QMainWindow):
         # 프레임 인덱스 초기화
         self.frame_idx = 0
         print("녹화 종료 및 로그 저장 및 압축 시작")
+        self.waiting_save_label.setText("")
+        self.waiting_save_label.setVisibile(False)
+        self.record_button.setEnabled(True)
+        self.record_button.setText("▶ Start Recording")
+        self.record_button.setStyleSheet("font-size: 20pt; background-color: green; color: white;")
 
     def on_compress_finished(self, success, msg):
         if success:
