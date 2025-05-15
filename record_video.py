@@ -561,11 +561,18 @@ class DrowsinessApp(QMainWindow):
             df_chi = (2 * b * b) / v
             ulc_spe = (v / (2 * b)) * chi2.ppf(1 - alpha, df_chi)
             
+            T2_Anomaly_Score = T2 / ulc_t2
+            SPE_Anomaly_Score = SPE / ulc_spe
+            
+            anomaly_flag = (T2 >= ulc_t2) or (SPE >= ulc_spe)
+            
+            
             # 5) DataFrame에 컬럼 추가
             df_wearable_features[f"{domain}_T2"]      = T2
             df_wearable_features[f"{domain}_SPE"]     = SPE
-            df_wearable_features[f"{domain}_ULC_T2"]  = ulc_t2
-            df_wearable_features[f"{domain}_ULC_SPE"] = ulc_spe
+            df_wearable_features[f"{domain}_T2 / ULC"]  = T2_Anomaly_Score
+            df_wearable_features[f"{domain}_SPE / ULC"] = SPE_Anomaly_Score
+            df_wearable_features[f"{domain}_Anomaly Flag"] = anomaly_flag
             
         # 6) 결과 반환
         return df_wearable_features
