@@ -4,7 +4,7 @@ import csv
 import pandas as pd
 
 # 압축된 zstd 파일(.csv.zst)을 해제하여 원본 CSV로 복구하는 스크립트
-# 사용법: python decode_zstd_csv.py data/label1.csv.zst
+# 사용법: python decode_zstd_csv.py data/label1.csv.zst data/label1_wearable.csv data/video1_drowsiness_label.csv data/label1_merged.csv
 
 def decompress_zstd_csv(zstd_path, wearable_path, drowsiness_path, out_csv_path=None):
     if not zstd_path.endswith('.zst'):
@@ -15,7 +15,7 @@ def decompress_zstd_csv(zstd_path, wearable_path, drowsiness_path, out_csv_path=
 
     if out_csv_path is None:
         out_csv_path = zstd_path[:-4]  # .zst 제거
-        
+    
     tmp_csv = out_csv_path + '.tmp'
     dctx = zstd.ZstdDecompressor()
     with open(zstd_path, 'rb') as f_in, open(tmp_csv, 'w', encoding='utf-8', newline='') as f_out:
@@ -28,14 +28,10 @@ def decompress_zstd_csv(zstd_path, wearable_path, drowsiness_path, out_csv_path=
                 f_out.write(chunk.decode('utf-8'))
     print(f"랜드마크 복호화 완료: {tmp_csv}")
     
-    # 3) pandas로 불러와 병합
+    # pandas로 불러와 병합
     df_land = pd.read_csv(tmp_csv)
     df_wear = pd.read_csv(wearable_path)
     df_drow = pd.read_csv(drowsiness_path)
-    
-    # Segment End 컬럼 제거
-    # if 'Segment End' in df_wear.columns:
-    #     df_wear = df_wear.drop(columns=['Segment End'])
     
     intervals = pd.IntervalIndex.from_arrays(
         df_wear['Timestamp'],
@@ -43,16 +39,16 @@ def decompress_zstd_csv(zstd_path, wearable_path, drowsiness_path, out_csv_path=
         closed='both'
     )
     
-    # 4) 웨어러블 피처만 뽑아놓고
+    # 웨어러블 피처만 뽑아놓고
     wear_feats = df_wear.drop(columns=['Timestamp','Segment End'])
     
-    # 5) 각 랜드마크 타임스탬프에 대응하는 세그먼트 인덱스 찾기
+    # 각 랜드마크 타임스탬프에 대응하는 세그먼트 인덱스 찾기
     idx = intervals.get_indexer(df_land['Timestamp'])
 
-    # 6) 인덱스를 통해 피처 할당 (일치하지 않으면 -1 → NaN)
+    # 인덱스를 통해 피처 할당 (일치하지 않으면 -1 → NaN)
     df_wear_aligned = wear_feats.reindex(idx).reset_index(drop=True)
         
-    # 7) 합치기
+    # 합치기
     df_merged = pd.concat([df_land.reset_index(drop=True), df_wear_aligned], axis=1)
     
     df_merged['drowsiness'] = pd.NA
@@ -64,11 +60,11 @@ def decompress_zstd_csv(zstd_path, wearable_path, drowsiness_path, out_csv_path=
         mask = (df_merged['Timestamp'] >= start) & (df_merged['Timestamp'] <= end)
         df_merged.loc[mask, 'drowsiness'] = label
     
-    # 4) 최종 파일로 저장
+    # 최종 파일로 저장
     df_merged.to_csv(out_csv_path, index=False, encoding='utf-8')
     print(f"✅ 통합 CSV 저장 완료: {out_csv_path}")
     
-    # 5) 임시 파일 정리
+    # 임시 파일 정리
     os.remove(tmp_csv)
     
     
