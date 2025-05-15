@@ -35,7 +35,7 @@ python labeler.py
 ### 3. 압축된 CSV 복호화
 
 ```bash
-python decode_zstd_csv.py data/label1.csv.zst
+python decode_zstd_csv.py data/label1.csv.zst data/label1_wearable.csv data/video1_drowsiness_label.csv data/label1_merged.csv
 ```
 - `data/label1.csv.zst` → `data/label1.csv`로 복원
 
