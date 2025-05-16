@@ -310,7 +310,7 @@ class DrowsinessApp(QMainWindow):
         self.frame_idx = 0
         print("녹화 종료 및 로그 저장 및 압축 시작")
         self.waiting_save_label.setText("")
-        self.waiting_save_label.setVisibile(False)
+        self.waiting_save_label.setVisible(False)
         self.record_button.setEnabled(True)
         self.record_button.setText("▶ Start Recording")
         self.record_button.setStyleSheet("font-size: 20pt; background-color: green; color: white;")
@@ -468,7 +468,6 @@ class DrowsinessApp(QMainWindow):
             hrv_freq = nk.hrv_frequency(inds, sampling_rate=fs, normalize=False)
             if not hrv_freq.empty:
                 freq_metrics = {
-                    "power_vlf": hrv_freq["HRV_VLF"].iloc[0],
                     "power_lf":  hrv_freq["HRV_LF"].iloc[0],
                     "power_hf":  hrv_freq["HRV_HF"].iloc[0],
                     "total_power": hrv_freq["HRV_TP"].iloc[0],
@@ -564,7 +563,7 @@ class DrowsinessApp(QMainWindow):
             T2_Anomaly_Score = T2 / ulc_t2
             SPE_Anomaly_Score = SPE / ulc_spe
             
-            anomaly_flag = (T2 >= ulc_t2) or (SPE >= ulc_spe)
+            anomaly_flag = ((T2 >= ulc_t2) | (SPE >= ulc_spe)).astype(int)
             
             
             # 5) DataFrame에 컬럼 추가
