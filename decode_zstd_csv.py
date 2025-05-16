@@ -34,14 +34,26 @@ def decompress_zstd_csv(zstd_path, wearable_path, drowsiness_path, out_csv_path=
     df_drow = pd.read_csv(drowsiness_path)
     
     # Segment End 컬럼 제거
-    if 'Segment End' in df_wear.columns:
-        df_wear = df_wear.drop(columns=['Segment End'])
-        
-    # Round wearable timestamps to nearest 2-minute multiple
-    df_wear['Timestamp'] = (df_wear['Timestamp'] / 120.0).round() * 120.0
+    # if 'Segment End' in df_wear.columns:
+    #     df_wear = df_wear.drop(columns=['Segment End'])
     
-    # Timestamp 기준 left join
-    df_merged = pd.merge(df_land, df_wear, on='Timestamp', how='left')
+    intervals = pd.IntervalIndex.from_arrays(
+        df_wear['Timestamp'],
+        df_wear['Segment End'],
+        closed='both'
+    )
+    
+    # 4) 웨어러블 피처만 뽑아놓고
+    wear_feats = df_wear.drop(columns=['Timestamp','Segment End'])
+    
+    # 5) 각 랜드마크 타임스탬프에 대응하는 세그먼트 인덱스 찾기
+    idx = intervals.get_indexer(df_land['Timestamp'])
+
+    # 6) 인덱스를 통해 피처 할당 (일치하지 않으면 -1 → NaN)
+    df_wear_aligned = wear_feats.reindex(idx).reset_index(drop=True)
+        
+    # 7) 합치기
+    df_merged = pd.concat([df_land.reset_index(drop=True), df_wear_aligned], axis=1)
     
     df_merged['drowsiness'] = pd.NA
     
