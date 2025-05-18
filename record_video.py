@@ -281,7 +281,7 @@ class DrowsinessApp(QMainWindow):
         self.record_button.setStyleSheet("font-size: 20pt; background-color: grey; color: white;")
         self.record_button.setEnabled(False)
         # 3분(180000ms) 뒤에 finish_wearable 를 호출
-        QTimer.singleShot(180000, self.finish_wearable)
+        QTimer.singleShot(60000, self.finish_wearable)
         
 
     def finish_wearable(self):
