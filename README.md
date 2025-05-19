@@ -37,7 +37,7 @@ python labeler.py
 ```bash
 python decode_zstd_csv.py data/label1.csv.zst data/label1_wearable.csv data/video1_drowsiness_label.csv data/label1_merged.csv
 ```
-- `data/label1.csv.zst` → `data/label1.csv`로 복원
+- `data/label1.csv.zst data/label1_wearable.csv data/video1_drowsiness_label.csv` → `data/label1_merged.csv`로 결합
 
 ### 4. 랜드마크 CSV 시각화(mp4 변환)
 
